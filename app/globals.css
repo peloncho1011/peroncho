@@ -22,3 +22,6 @@
 
 /* 削除・バックアップ操作 */
 .detail-actions{display:flex;flex-direction:column;gap:4px}.delete-action{height:44px;border:0;background:transparent;color:#bd4f47;font-size:11px;font-weight:750}.delete-symbol{background:#ffe6e3;color:#b3473e}.two-actions .danger{background:#d94f49;color:#fff}.settings-list>label.settings-file-button{width:100%;border:0;border-bottom:1px solid #eceef2;background:#fff;padding:13px 14px;display:flex;justify-content:space-between;text-align:left;cursor:pointer}.settings-file-button span{font-size:12px;font-weight:650}.settings-file-button small{display:block;color:#9097a4;font-size:9px;margin-top:4px;font-weight:400}.settings-file-button input{display:none}
+
+/* AI連携：通信中・エラー・確認質問を分かりやすく表示 */
+.primary-full:disabled{cursor:not-allowed;opacity:.55}.ai-error{margin-top:11px;padding:11px 12px;border-radius:12px;background:#ffe8e5;color:#a74238;font-size:11px;line-height:1.55;text-align:left}.clarification-box{margin:18px 0;padding:16px;border:1px solid #f0d795;background:#fff5d8;border-radius:15px}.clarification-box span{font-size:10px;font-weight:800;color:#8b6417}.clarification-box p{font-size:14px;line-height:1.65;margin:7px 0 0}.confidence-label{margin:8px 2px 0;text-align:right;color:#7b8494;font-size:9px;font-weight:700}

@@ -29,10 +29,24 @@ type Task = {
   note?: string;
 };
 
-const STORAGE_KEY = "peroncho-os-data-v2";
+type AiAction = "create_task" | "add_subtask" | "update_due_date" | "update_priority" | "complete_task" | "ask_clarification";
+type AiDecision = {
+  action: AiAction;
+  title: string;
+  targetTaskId: number | null;
+  targetTaskTitle: string | null;
+  dueDate: string | null;
+  priority: Task["priority"] | null;
+  category: string | null;
+  minutes: number | null;
+  reason: string;
+  confirmationMessage: string;
+  clarificationQuestion: string | null;
+  confidence: number;
+};
 
+const STORAGE_KEY = "peroncho-os-data-v3";
 const initialTasks: Task[] = [];
-
 const oldHistory: Task[] = [];
 
 type Sheet = "none" | "detail" | "manual" | "ai" | "confirm" | "history" | "settings" | "warning" | "delete";
@@ -43,11 +57,14 @@ export default function Home() {
   const [sheet, setSheet] = useState<Sheet>("none");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [toast, setToast] = useState("");
-  const [speech, setSpeech] = useState("あの営業会議の表を修正するを追加して");
+  const [speech, setSpeech] = useState("");
   const [sort, setSort] = useState("おすすめ順");
   const [filter, setFilter] = useState("すべて");
   const [storageReady, setStorageReady] = useState(false);
   const [addAsSubtask, setAddAsSubtask] = useState(false);
+  const [aiDecision, setAiDecision] = useState<AiDecision | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
   const now = new Date();
   const greeting = now.getHours() < 11 ? "おはようございます" : now.getHours() < 18 ? "こんにちは" : "こんばんは";
   const todayLabel = new Intl.DateTimeFormat("ja-JP", { month: "long", day: "numeric", weekday: "long" }).format(now);
@@ -233,16 +250,82 @@ export default function Home() {
     setAddAsSubtask(false);
   }
 
-  function addAiSubtask() {
-    setTasks((current) =>
-      current.map((task) =>
-        task.id === 1 && !task.subtasks.some((sub) => sub.title === "営業会議の表を修正する")
-          ? { ...task, subtasks: [...task.subtasks, { id: Date.now(), title: "営業会議の表を修正する", completed: false }] }
-          : task,
-      ),
-    );
+  async function analyzeWithAi() {
+    const trimmed = speech.trim();
+    if (!trimmed || aiLoading) return;
+    setAiLoading(true);
+    setAiError("");
+    setAiDecision(null);
+    try {
+      const response = await fetch("/api/ai/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ speech: trimmed, tasks }),
+      });
+      const data = await response.json() as { decision?: AiDecision; error?: string };
+      if (!response.ok || !data.decision) throw new Error(data.error || "AIが内容を整理できませんでした");
+      setAiDecision(data.decision);
+      setSheet("confirm");
+    } catch (error) {
+      setAiError(error instanceof Error ? error.message : "AIとの通信に失敗しました");
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  function applyAiDecision() {
+    if (!aiDecision || aiDecision.action === "ask_clarification") return;
+    const target = aiDecision.targetTaskId === null ? undefined : tasks.find((task) => task.id === aiDecision.targetTaskId);
+    const deadline = createDeadline(aiDecision.dueDate ?? "");
+
+    if (aiDecision.action === "create_task") {
+      setTasks((current) => [...current, {
+        id: Date.now(),
+        title: aiDecision.title,
+        priority: aiDecision.priority ?? "中",
+        category: aiDecision.category ?? "その他",
+        minutes: Math.max(1, aiDecision.minutes ?? 15),
+        subtasks: [],
+        ...deadline,
+      }]);
+    } else if (aiDecision.action === "add_subtask" && target) {
+      setTasks((current) => current.map((task) => task.id === target.id ? {
+        ...task,
+        subtasks: [...task.subtasks, {
+          id: Date.now(),
+          title: aiDecision.title,
+          completed: false,
+          ...(aiDecision.dueDate ? { dueDate: aiDecision.dueDate, due: deadline.due, dueTone: deadline.dueTone, dueProgress: deadline.dueProgress ?? undefined } : {}),
+        }],
+      } : task));
+    } else if (aiDecision.action === "update_due_date" && target) {
+      setTasks((current) => current.map((task) => task.id === target.id ? { ...task, ...deadline } : task));
+    } else if (aiDecision.action === "update_priority" && target && aiDecision.priority) {
+      setTasks((current) => current.map((task) => task.id === target.id ? { ...task, priority: aiDecision.priority! } : task));
+    } else if (aiDecision.action === "complete_task" && target) {
+      setSelectedId(target.id);
+      if (target.subtasks.some((subtask) => !subtask.completed)) {
+        setSheet("warning");
+        return;
+      }
+      completeTask(target.id);
+      return;
+    } else {
+      setAiError("対象のタスクが見つかりません。もう一度、具体的に入力してください。");
+      setSheet("ai");
+      return;
+    }
+
     setSheet("none");
-    notify("営業会議のサブタスクに追加しました");
+    setSpeech("");
+    setAiDecision(null);
+    notify(aiDecision.confirmationMessage);
+  }
+
+  function continueClarification() {
+    if (!aiDecision?.clarificationQuestion) return;
+    setSpeech(`${speech}\n補足：`);
+    setSheet("ai");
   }
 
   return (
@@ -345,22 +428,30 @@ export default function Home() {
             <div className="listening-ring"><div className="microphone">●</div></div>
             <h2>何をしてほしいですか？</h2>
             <p>話した内容を、AIがタスクに整理します。</p>
-            <label className="speech-input"><span>認識した内容</span><textarea value={speech} onChange={(event) => setSpeech(event.target.value)} /></label>
-            <button className="primary-full" onClick={() => setSheet("confirm")}>AIに送る</button>
+            <label className="speech-input"><span>認識した内容</span><textarea value={speech} maxLength={500} placeholder="例：明日までに営業会議の資料を確認する" onChange={(event) => setSpeech(event.target.value)} /></label>
+            {aiError && <div className="ai-error" role="alert">{aiError}</div>}
+            <button className="primary-full" disabled={!speech.trim() || aiLoading} onClick={analyzeWithAi}>{aiLoading ? "AIが整理しています…" : "AIに送る"}</button>
           </div>
         </div>
       )}
 
-      {sheet === "confirm" && (
+      {sheet === "confirm" && aiDecision && (
         <div className="sheet large-sheet">
           <SheetHeader title="AIが内容を整理しました" onClose={() => setSheet("none")} />
           <div className="sheet-body">
             <div className="quote-box"><span>あなたの入力</span><p>「{speech}」</p></div>
-            <div className="decision-card"><div className="decision-icon">✦</div><div><span>判断した操作</span><h3>サブタスクを追加</h3></div></div>
-            <div className="confirm-row"><span>追加先</span><strong>営業会議の議事録を作る</strong></div>
-            <div className="confirm-row"><span>追加内容</span><strong>営業会議の表を修正する</strong></div>
-            <div className="reason-box"><span>判断した理由</span><p>営業会議に関係する既存タスクが、この1件だけ見つかったためです。</p></div>
-            <div className="two-actions"><button onClick={() => setSheet("none")}>キャンセル</button><button className="dark" onClick={addAiSubtask}>この内容で追加</button></div>
+            <div className="decision-card"><div className="decision-icon">✦</div><div><span>判断した操作</span><h3>{actionLabel(aiDecision.action)}</h3></div></div>
+            {aiDecision.action === "ask_clarification" ? (
+              <div className="clarification-box"><span>確認させてください</span><p>{aiDecision.clarificationQuestion}</p></div>
+            ) : <>
+              {aiDecision.targetTaskTitle && <div className="confirm-row"><span>対象タスク</span><strong>{aiDecision.targetTaskTitle}</strong></div>}
+              {aiDecision.title && <div className="confirm-row"><span>内容</span><strong>{aiDecision.title}</strong></div>}
+              {aiDecision.dueDate && <div className="confirm-row"><span>期限</span><strong>{aiDecision.dueDate}</strong></div>}
+              {aiDecision.priority && <div className="confirm-row"><span>優先度</span><strong>{aiDecision.priority}</strong></div>}
+            </>}
+            <div className="reason-box"><span>判断した理由</span><p>{aiDecision.reason}</p></div>
+            <p className="confidence-label">AIの確信度 {Math.round(aiDecision.confidence * 100)}%</p>
+            <div className="two-actions"><button onClick={() => setSheet("none")}>キャンセル</button>{aiDecision.action === "ask_clarification" ? <button className="dark" onClick={continueClarification}>補足する</button> : <button className="dark" onClick={applyAiDecision}>この内容で実行</button>}</div>
           </div>
         </div>
       )}
@@ -390,7 +481,7 @@ export default function Home() {
       {sheet === "settings" && (
         <div className="sheet large-sheet">
           <SheetHeader title="設定" onClose={() => setSheet("none")} />
-          <div className="sheet-body settings-list"><h3>表示</h3><button><span>表示名<small>雄哉</small></span><b>›</b></button><button><span>朝の基準時刻<small>午前5:00</small></span><b>›</b></button><h3>データ</h3><button onClick={exportBackup}><span>バックアップを書き出す<small>タスクをファイルに保存</small></span><b>↓</b></button><label className="settings-file-button"><span>バックアップを読み込む<small>保存したJSONファイルから復元</small></span><b>↑</b><input type="file" accept="application/json,.json" onChange={importBackup} /></label><h3>アプリ</h3><button><span>ぺろんちょOS<small>動作版 v0.2</small></span></button></div>
+          <div className="sheet-body settings-list"><h3>表示</h3><button><span>表示名<small>雄哉</small></span><b>›</b></button><button><span>朝の基準時刻<small>午前5:00</small></span><b>›</b></button><h3>データ</h3><button onClick={exportBackup}><span>バックアップを書き出す<small>タスクをファイルに保存</small></span><b>↓</b></button><label className="settings-file-button"><span>バックアップを読み込む<small>保存したJSONファイルから復元</small></span><b>↑</b><input type="file" accept="application/json,.json" onChange={importBackup} /></label><h3>アプリ</h3><button><span>ぺろんちょOS<small>AI連携版 v0.3</small></span></button></div>
         </div>
       )}
     </main>
@@ -427,6 +518,17 @@ function SheetHeader({ title, onClose, action, onAction }: { title: string; onCl
 
 function Detail({ label, value }: { label: string; value: string }) {
   return <div><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function actionLabel(action: AiAction) {
+  return {
+    create_task: "新しいタスクを作成",
+    add_subtask: "サブタスクを追加",
+    update_due_date: "期限を変更",
+    update_priority: "優先度を変更",
+    complete_task: "タスクを完了",
+    ask_clarification: "確認が必要",
+  }[action];
 }
 
 function taskScore(task: Task) {
