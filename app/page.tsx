@@ -29,103 +29,11 @@ type Task = {
   note?: string;
 };
 
-const STORAGE_KEY = "peroncho-os-data-v1";
+const STORAGE_KEY = "peroncho-os-data-v2";
 
-const initialTasks: Task[] = [
-  {
-    id: 1,
-    title: "営業会議の議事録を作る",
-    due: "今日まで",
-    dueTone: "urgent",
-    dueProgress: 4,
-    priority: "高",
-    category: "仕事",
-    minutes: 40,
-    reason: "今日が期限で、優先度が高いため",
-    subtasks: [
-      { id: 11, title: "会議内容を整理する", completed: true },
-      { id: 12, title: "議事録の初稿を作る", completed: false, due: "明日まで", dueTone: "urgent", dueProgress: 12 },
-    ],
-  },
-  {
-    id: 2,
-    title: "藤原さんの福祉用具点検を調整",
-    due: "明日まで",
-    dueTone: "urgent",
-    dueProgress: 12,
-    priority: "高",
-    category: "利用者対応",
-    minutes: 10,
-    reason: "期限が近く、短時間で完了できるため",
-    subtasks: [
-      { id: 21, title: "担当者へ連絡する", completed: false, due: "今日まで", dueTone: "urgent", dueProgress: 4 },
-      { id: 22, title: "訪問時間を確認する", completed: false },
-    ],
-  },
-  {
-    id: 3,
-    title: "ケアマネ営業先リストを更新",
-    due: "あと3日",
-    dueTone: "soon",
-    dueProgress: 30,
-    priority: "中",
-    category: "営業",
-    minutes: 25,
-    reason: "今週中の営業準備を進めるため",
-    subtasks: [
-      { id: 31, title: "新規候補を追加する", completed: false },
-      { id: 32, title: "既存のつながりを確認する", completed: false },
-    ],
-  },
-  {
-    id: 4,
-    title: "訪問予定表を確認する",
-    due: "あと5日",
-    dueTone: "soon",
-    dueProgress: 50,
-    priority: "中",
-    category: "仕事",
-    minutes: 15,
-    subtasks: [],
-  },
-  {
-    id: 5,
-    title: "週末の買い物リストを作る",
-    due: "あと8日",
-    dueTone: "safe",
-    dueProgress: 80,
-    priority: "低",
-    category: "生活",
-    minutes: 10,
-    subtasks: [],
-  },
-  {
-    id: 6,
-    title: "新しいAIツールを試す",
-    due: "期限なし",
-    dueTone: "none",
-    dueProgress: null,
-    priority: "低",
-    category: "個人",
-    minutes: 30,
-    subtasks: [],
-  },
-];
+const initialTasks: Task[] = [];
 
-const oldHistory: Task[] = [
-  {
-    id: 91,
-    title: "7月の訪問件数を集計する",
-    due: "完了",
-    dueTone: "none",
-    dueProgress: null,
-    priority: "中",
-    category: "仕事",
-    minutes: 20,
-    subtasks: [],
-    completedAt: "7月19日 17:45",
-  },
-];
+const oldHistory: Task[] = [];
 
 type Sheet = "none" | "detail" | "manual" | "ai" | "confirm" | "history" | "settings" | "warning" | "delete";
 
