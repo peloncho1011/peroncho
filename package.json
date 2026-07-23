@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test:recurring": "node --experimental-strip-types --test lib/recurring.test.ts"
   },
   "dependencies": {
     "next": "16.2.6",
