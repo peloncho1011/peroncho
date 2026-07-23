@@ -58,3 +58,4 @@ test("31日指定は短い月の末日に収める", () => {
   assert.equal(next.createDate, "2027-02-28");
   assert.equal(next.dueDate, "2027-02-28");
 });
+

@@ -627,7 +627,7 @@ export default function Home() {
       {sheet === "settings" && (
         <div className="sheet large-sheet">
           <SheetHeader title="設定" onClose={() => setSheet("none")} />
-          <div className="sheet-body settings-list"><h3>表示</h3><button><span>表示名<small>雄哉</small></span><b>›</b></button><button><span>朝の基準時刻<small>午前5:00</small></span><b>›</b></button><h3>タスク</h3><button onClick={() => setSheet("recurringList")}><span>定例タスク<small>{recurringTemplates.filter((template) => template.enabled).length}件が有効</small></span><b>›</b></button><h3>データ</h3><button onClick={exportBackup}><span>バックアップを書き出す<small>タスクと定例設定をファイルに保存</small></span><b>↓</b></button><label className="settings-file-button"><span>バックアップを読み込む<small>保存したJSONファイルから復元</small></span><b>↑</b><input type="file" accept="application/json,.json" onChange={importBackup} /></label><h3>アプリ</h3><button><span>ぺろんちょOS<small>定例タスク対応 v0.4</small></span></button></div>
+          <div className="sheet-body settings-list"><h3>表示</h3><button><span>表示名<small>雄哉</small></span><b>›</b></button><button><span>朝の基準時刻<small>午前5:00</small></span><b>›</b></button><h3>タスク</h3><button onClick={() => setSheet("recurringList")}><span>定例タスク<small>{recurringTemplates.filter((template) => template.enabled).length}件が有効</small></span><b>›</b></button><h3>データ</h3><button onClick={exportBackup}><span>バックアップを書き出す<small>タスクと定例設定をファイルに保存</small></span><b>↓</b></button><label className="settings-file-button"><span>バックアップを読み込む<small>保存したJSONファイルから復元</small></span><b>↑</b><input type="file" accept="application/json,.json" onChange={importBackup} /></label><h3>アプリ</h3><button><span>ぺろんちょOS<small>ホーム画面アイコン対応 v0.5</small></span></button></div>
         </div>
       )}
 
