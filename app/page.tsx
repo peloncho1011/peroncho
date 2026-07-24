@@ -1,6 +1,8 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
+import { createBrowserSupabase } from "../lib/supabase";
 import {
   adjustmentLabel,
   createDefaultRecurringTemplates,
@@ -67,7 +69,7 @@ const STORAGE_KEY = "peroncho-os-data-v3";
 const initialTasks: Task[] = [];
 const oldHistory: Task[] = [];
 
-type Sheet = "none" | "detail" | "manual" | "ai" | "confirm" | "history" | "settings" | "warning" | "delete" | "recurringList" | "recurringEdit" | "recurringDelete";
+type Sheet = "none" | "detail" | "manual" | "ai" | "confirm" | "history" | "settings" | "warning" | "delete" | "recurringList" | "recurringEdit" | "recurringDelete" | "account" | "notifications";
 
 export default function Home() {
   const [tasks, setTasks] = useState(initialTasks);
@@ -89,6 +91,14 @@ export default function Home() {
   const [repeatEnabled, setRepeatEnabled] = useState(false);
   const [repeatFrequency, setRepeatFrequency] = useState<RecurringFrequency>("monthly");
   const [recurringSubtasks, setRecurringSubtasks] = useState<string[]>([]);
+  const [session, setSession] = useState<Session | null>(null);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
+  const [cloudStatus, setCloudStatus] = useState<"local" | "syncing" | "synced" | "error">("local");
+  const [notificationHour, setNotificationHour] = useState(8);
+  const [notificationEnabled, setNotificationEnabled] = useState(false);
+  const cloudLoadedFor = useRef<string | null>(null);
+  const supabase = useMemo(() => createBrowserSupabase(), []);
   const now = new Date();
   const greeting = now.getHours() < 11 ? "おはようございます" : now.getHours() < 18 ? "こんにちは" : "こんばんは";
   const todayLabel = new Intl.DateTimeFormat("ja-JP", { month: "long", day: "numeric", weekday: "long" }).format(now);
@@ -140,6 +150,56 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [storageReady, tasks]);
 
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession));
+    return () => data.subscription.unsubscribe();
+  }, [supabase]);
+
+  useEffect(() => {
+    if (!storageReady || !session || !supabase || cloudLoadedFor.current === session.user.id || cloudLoadedFor.current === `loading:${session.user.id}`) return;
+    cloudLoadedFor.current = `loading:${session.user.id}`;
+    setCloudStatus("syncing");
+    supabase.from("user_app_state").select("payload").eq("user_id", session.user.id).maybeSingle().then(({ data, error }) => {
+      if (error) {
+        cloudLoadedFor.current = null;
+        setCloudStatus("error");
+        return;
+      }
+      const payload = data?.payload as { tasks?: Task[]; history?: Task[]; recurringTemplates?: RecurringTemplate[]; generatedRecurringKeys?: string[]; notificationHour?: number } | undefined;
+      if (payload && isTaskArray(payload.tasks) && isTaskArray(payload.history)) {
+        setTasks(payload.tasks.map(refreshDeadline));
+        setHistory(payload.history);
+        if (isRecurringTemplateArray(payload.recurringTemplates)) setRecurringTemplates(payload.recurringTemplates);
+        if (Array.isArray(payload.generatedRecurringKeys)) setGeneratedRecurringKeys(payload.generatedRecurringKeys);
+        if (typeof payload.notificationHour === "number") setNotificationHour(payload.notificationHour);
+      }
+      cloudLoadedFor.current = session.user.id;
+      setCloudStatus("synced");
+    });
+  }, [storageReady, session, supabase]);
+
+  useEffect(() => {
+    if (!storageReady || !session || !supabase || cloudLoadedFor.current !== session.user.id) return;
+    setCloudStatus("syncing");
+    const timer = window.setTimeout(async () => {
+      const { error } = await supabase.from("user_app_state").upsert({
+        user_id: session.user.id,
+        payload: { tasks, history, recurringTemplates, generatedRecurringKeys, notificationHour },
+        updated_at: new Date().toISOString(),
+      });
+      setCloudStatus(error ? "error" : "synced");
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [tasks, history, recurringTemplates, generatedRecurringKeys, notificationHour, storageReady, session, supabase]);
+
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.register("/sw.js");
+    if ("Notification" in window) setNotificationEnabled(Notification.permission === "granted");
+  }, []);
+
   const selected = tasks.find((task) => task.id === selectedId) ?? history.find((task) => task.id === selectedId);
   const topThree = useMemo(() => [...tasks]
     .sort((a, b) => taskScore(b) - taskScore(a))
@@ -161,6 +221,71 @@ export default function Home() {
   function notify(message: string) {
     setToast(message);
     window.setTimeout(() => setToast(""), 2400);
+  }
+
+  async function sendLoginLink(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !authEmail.trim()) return;
+    const { error } = await supabase.auth.signInWithOtp({
+      email: authEmail.trim(),
+      options: { emailRedirectTo: window.location.origin },
+    });
+    setAuthMessage(error ? error.message : "ログイン用メールを送りました。メール内のリンクを押してください。");
+  }
+
+  async function signOut() {
+    await supabase?.auth.signOut();
+    cloudLoadedFor.current = null;
+    setCloudStatus("local");
+    setSheet("settings");
+    notify("ログアウトしました");
+  }
+
+  async function enablePushNotifications() {
+    if (!session) {
+      setSheet("account");
+      setAuthMessage("通知を使うには、先にログインしてください。");
+      return;
+    }
+    try {
+      if (!("Notification" in window) || !("serviceWorker" in navigator)) throw new Error("iPhoneではホーム画面に追加したアプリから設定してください");
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") throw new Error("iPhoneの設定で通知を許可してください");
+      const registration = await navigator.serviceWorker.ready;
+      const key = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+      if (!key) throw new Error("VAPID公開鍵が未設定です");
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(key),
+      });
+      const response = await fetch("/api/push/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ subscription: subscription.toJSON(), notificationHour }),
+      });
+      if (!response.ok) throw new Error((await response.json()).error || "通知登録に失敗しました");
+      setNotificationEnabled(true);
+      notify("お知らせを有効にしました");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "通知設定に失敗しました");
+    }
+  }
+
+  async function sendTestNotification() {
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      if (!subscription) throw new Error("先にお知らせを有効にしてください");
+      const response = await fetch("/api/push/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscription: subscription.toJSON() }),
+      });
+      if (!response.ok) throw new Error((await response.json()).error || "通知テストに失敗しました");
+      notify("テスト通知を送信しました");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "通知テストに失敗しました");
+    }
   }
 
   function openTask(id: number) {
@@ -627,7 +752,29 @@ export default function Home() {
       {sheet === "settings" && (
         <div className="sheet large-sheet">
           <SheetHeader title="設定" onClose={() => setSheet("none")} />
-          <div className="sheet-body settings-list"><h3>表示</h3><button><span>表示名<small>雄哉</small></span><b>›</b></button><button><span>朝の基準時刻<small>午前5:00</small></span><b>›</b></button><h3>タスク</h3><button onClick={() => setSheet("recurringList")}><span>定例タスク<small>{recurringTemplates.filter((template) => template.enabled).length}件が有効</small></span><b>›</b></button><h3>データ</h3><button onClick={exportBackup}><span>バックアップを書き出す<small>タスクと定例設定をファイルに保存</small></span><b>↓</b></button><label className="settings-file-button"><span>バックアップを読み込む<small>保存したJSONファイルから復元</small></span><b>↑</b><input type="file" accept="application/json,.json" onChange={importBackup} /></label><h3>アプリ</h3><button><span>ぺろんちょOS<small>ホーム画面アイコン対応 v0.5</small></span></button></div>
+          <div className="sheet-body settings-list"><h3>アカウント</h3><button onClick={() => setSheet("account")}><span>{session ? session.user.email : "ログイン"}<small>{session ? cloudStatusLabel(cloudStatus) : "クラウド保存を利用できます"}</small></span><b>›</b></button><h3>お知らせ</h3><button onClick={() => setSheet("notifications")}><span>プッシュ通知<small>{notificationEnabled ? `毎朝${notificationHour}時に確認` : "オフ"}</small></span><b>›</b></button><h3>表示</h3><button><span>表示名<small>雄哉</small></span><b>›</b></button><button><span>朝の基準時刻<small>午前5:00</small></span><b>›</b></button><h3>タスク</h3><button onClick={() => setSheet("recurringList")}><span>定例タスク<small>{recurringTemplates.filter((template) => template.enabled).length}件が有効</small></span><b>›</b></button><h3>データ</h3><button onClick={exportBackup}><span>バックアップを書き出す<small>タスクと定例設定をファイルに保存</small></span><b>↓</b></button><label className="settings-file-button"><span>バックアップを読み込む<small>保存したJSONファイルから復元</small></span><b>↑</b><input type="file" accept="application/json,.json" onChange={importBackup} /></label><h3>アプリ</h3><button><span>ぺろんちょOS<small>クラウド・通知対応 v0.6</small></span></button></div>
+        </div>
+      )}
+
+      {sheet === "account" && (
+        <div className="sheet large-sheet">
+          <SheetHeader title="アカウント" onClose={() => setSheet("settings")} />
+          <div className="sheet-body account-panel">
+            {session ? <><div className="status-card"><span className="status-dot" /><div><strong>ログイン中</strong><small>{session.user.email}</small><small>{cloudStatusLabel(cloudStatus)}</small></div></div><p>このiPhoneの既存データはクラウドへ保存され、同じメールでログインした端末と同期されます。</p><button className="secondary-full" onClick={signOut}>ログアウト</button></> : <form onSubmit={sendLoginLink} className="task-form"><p>メールアドレスへ届くリンクを押すだけでログインできます。パスワードは不要です。</p><label>メールアドレス<input type="email" required value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="example@email.com" /></label><button className="primary-full" type="submit">ログイン用メールを送る</button>{authMessage && <div className="auth-message">{authMessage}</div>}</form>}
+          </div>
+        </div>
+      )}
+
+      {sheet === "notifications" && (
+        <div className="sheet large-sheet">
+          <SheetHeader title="お知らせ" onClose={() => setSheet("settings")} />
+          <div className="sheet-body notification-panel">
+            <div className={`notification-hero ${notificationEnabled ? "enabled" : ""}`}><span>🔔</span><div><strong>{notificationEnabled ? "お知らせは有効です" : "期限をiPhoneへお知らせ"}</strong><small>期限3日前・前日・当日の対象タスクを通知します</small></div></div>
+            <label>通知時刻<select value={notificationHour} onChange={(event) => setNotificationHour(Number(event.target.value))}><option value={8}>8:00</option></select></label>
+            <p className="notification-note">iPhoneでは、Safariからホーム画面に追加した「ぺろんちょOS」を開いて設定してください。</p>
+            <button className="primary-full" onClick={enablePushNotifications}>{notificationEnabled ? "通知設定を更新する" : "お知らせを有効にする"}</button>
+            {notificationEnabled && <button className="secondary-full" onClick={sendTestNotification}>テスト通知を送る</button>}
+          </div>
         </div>
       )}
 
@@ -724,6 +871,22 @@ function actionLabel(action: AiAction) {
     complete_task: "タスクを完了",
     ask_clarification: "確認が必要",
   }[action];
+}
+
+function cloudStatusLabel(status: "local" | "syncing" | "synced" | "error") {
+  return {
+    local: "この端末だけに保存",
+    syncing: "クラウドへ保存中…",
+    synced: "クラウドに保存済み",
+    error: "同期できませんでした",
+  }[status];
+}
+
+function urlBase64ToUint8Array(value: string) {
+  const padding = "=".repeat((4 - value.length % 4) % 4);
+  const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = window.atob(base64);
+  return Uint8Array.from([...raw].map((character) => character.charCodeAt(0)));
 }
 
 function taskScore(task: Task) {

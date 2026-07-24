@@ -2,6 +2,26 @@
 
 個人専用のAI秘書アプリです。画面・基本動作に加え、OpenAI Responses APIによるタスク判断と実行前の確認画面を実装しています。
 
+## クラウド保存・プッシュ通知（v0.6）
+
+- メールリンクでログイン（パスワード不要）
+- Supabaseへのクラウド保存と端末間同期
+- 初回ログイン時に、この端末の既存タスクを引き継ぎ
+- iPhone PWAへのWeb Push通知
+- 期限3日前・前日・当日の毎朝通知
+- 朝8時の通知、通知テスト、重複送信防止
+
+### 初回セットアップ
+
+1. Supabaseで新しいプロジェクトを作る
+2. SQL Editorで `supabase/schema.sql` を実行する
+3. `npx web-push generate-vapid-keys` でVAPID鍵を作る
+4. Vercelへ `.env.example` に記載した環境変数を登録する
+5. 再デプロイ後、ホーム画面版の設定からログインし、通知を有効にする
+
+`SUPABASE_SERVICE_ROLE_KEY`、`VAPID_PRIVATE_KEY`、`CRON_SECRET` は公開せず、
+Vercelの環境変数だけに保存してください。
+
 ## ホーム画面アイコン（v0.5）
 
 - iPhone用 `apple-touch-icon.png`
