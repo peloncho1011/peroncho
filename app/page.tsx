@@ -93,6 +93,9 @@ export default function Home() {
   const [recurringSubtasks, setRecurringSubtasks] = useState<string[]>([]);
   const [session, setSession] = useState<Session | null>(null);
   const [authEmail, setAuthEmail] = useState("");
+  const [authOtp, setAuthOtp] = useState("");
+  const [authStep, setAuthStep] = useState<"email" | "otp">("email");
+  const [authLoading, setAuthLoading] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
   const [cloudStatus, setCloudStatus] = useState<"local" | "syncing" | "synced" | "error">("local");
   const [notificationHour, setNotificationHour] = useState(8);
@@ -223,20 +226,52 @@ export default function Home() {
     window.setTimeout(() => setToast(""), 2400);
   }
 
-  async function sendLoginLink(event: FormEvent<HTMLFormElement>) {
+  async function sendLoginCode(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!supabase || !authEmail.trim()) return;
+    setAuthLoading(true);
+    setAuthMessage("");
     const { error } = await supabase.auth.signInWithOtp({
       email: authEmail.trim(),
-      options: { emailRedirectTo: window.location.origin },
+      options: { shouldCreateUser: true },
     });
-    setAuthMessage(error ? error.message : "ログイン用メールを送りました。メール内のリンクを押してください。");
+    setAuthLoading(false);
+    if (error) {
+      setAuthMessage(error.message);
+      return;
+    }
+    setAuthOtp("");
+    setAuthStep("otp");
+    setAuthMessage("メールに届いた6桁の認証コードを入力してください。");
+  }
+
+  async function verifyLoginCode(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !authEmail.trim() || authOtp.length !== 6) return;
+    setAuthLoading(true);
+    setAuthMessage("");
+    const { error } = await supabase.auth.verifyOtp({
+      email: authEmail.trim(),
+      token: authOtp,
+      type: "email",
+    });
+    setAuthLoading(false);
+    if (error) {
+      setAuthMessage("コードが違うか、有効期限が切れています。再確認または再送してください。");
+      return;
+    }
+    setAuthMessage("");
+    setAuthOtp("");
+    setAuthStep("email");
+    notify("ログインしました");
   }
 
   async function signOut() {
     await supabase?.auth.signOut();
     cloudLoadedFor.current = null;
     setCloudStatus("local");
+    setAuthOtp("");
+    setAuthStep("email");
     setSheet("settings");
     notify("ログアウトしました");
   }
@@ -752,7 +787,7 @@ export default function Home() {
       {sheet === "settings" && (
         <div className="sheet large-sheet">
           <SheetHeader title="設定" onClose={() => setSheet("none")} />
-          <div className="sheet-body settings-list"><h3>アカウント</h3><button onClick={() => setSheet("account")}><span>{session ? session.user.email : "ログイン"}<small>{session ? cloudStatusLabel(cloudStatus) : "クラウド保存を利用できます"}</small></span><b>›</b></button><h3>お知らせ</h3><button onClick={() => setSheet("notifications")}><span>プッシュ通知<small>{notificationEnabled ? `毎朝${notificationHour}時に確認` : "オフ"}</small></span><b>›</b></button><h3>表示</h3><button><span>表示名<small>雄哉</small></span><b>›</b></button><button><span>朝の基準時刻<small>午前5:00</small></span><b>›</b></button><h3>タスク</h3><button onClick={() => setSheet("recurringList")}><span>定例タスク<small>{recurringTemplates.filter((template) => template.enabled).length}件が有効</small></span><b>›</b></button><h3>データ</h3><button onClick={exportBackup}><span>バックアップを書き出す<small>タスクと定例設定をファイルに保存</small></span><b>↓</b></button><label className="settings-file-button"><span>バックアップを読み込む<small>保存したJSONファイルから復元</small></span><b>↑</b><input type="file" accept="application/json,.json" onChange={importBackup} /></label><h3>アプリ</h3><button><span>ぺろんちょOS<small>クラウド・通知対応 v0.6</small></span></button></div>
+          <div className="sheet-body settings-list"><h3>アカウント</h3><button onClick={() => setSheet("account")}><span>{session ? session.user.email : "ログイン"}<small>{session ? cloudStatusLabel(cloudStatus) : "クラウド保存を利用できます"}</small></span><b>›</b></button><h3>お知らせ</h3><button onClick={() => setSheet("notifications")}><span>プッシュ通知<small>{notificationEnabled ? `毎朝${notificationHour}時に確認` : "オフ"}</small></span><b>›</b></button><h3>表示</h3><button><span>表示名<small>雄哉</small></span><b>›</b></button><button><span>朝の基準時刻<small>午前5:00</small></span><b>›</b></button><h3>タスク</h3><button onClick={() => setSheet("recurringList")}><span>定例タスク<small>{recurringTemplates.filter((template) => template.enabled).length}件が有効</small></span><b>›</b></button><h3>データ</h3><button onClick={exportBackup}><span>バックアップを書き出す<small>タスクと定例設定をファイルに保存</small></span><b>↓</b></button><label className="settings-file-button"><span>バックアップを読み込む<small>保存したJSONファイルから復元</small></span><b>↑</b><input type="file" accept="application/json,.json" onChange={importBackup} /></label><h3>アプリ</h3><button><span>ぺろんちょOS<small>6桁コードログイン対応 v0.7</small></span></button></div>
         </div>
       )}
 
@@ -760,7 +795,7 @@ export default function Home() {
         <div className="sheet large-sheet">
           <SheetHeader title="アカウント" onClose={() => setSheet("settings")} />
           <div className="sheet-body account-panel">
-            {session ? <><div className="status-card"><span className="status-dot" /><div><strong>ログイン中</strong><small>{session.user.email}</small><small>{cloudStatusLabel(cloudStatus)}</small></div></div><p>このiPhoneの既存データはクラウドへ保存され、同じメールでログインした端末と同期されます。</p><button className="secondary-full" onClick={signOut}>ログアウト</button></> : <form onSubmit={sendLoginLink} className="task-form"><p>メールアドレスへ届くリンクを押すだけでログインできます。パスワードは不要です。</p><label>メールアドレス<input type="email" required value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="example@email.com" /></label><button className="primary-full" type="submit">ログイン用メールを送る</button>{authMessage && <div className="auth-message">{authMessage}</div>}</form>}
+            {session ? <><div className="status-card"><span className="status-dot" /><div><strong>ログイン中</strong><small>{session.user.email}</small><small>{cloudStatusLabel(cloudStatus)}</small></div></div><p>このiPhoneの既存データはクラウドへ保存され、同じメールでログインした端末と同期されます。</p><button className="secondary-full" onClick={signOut}>ログアウト</button></> : authStep === "email" ? <form onSubmit={sendLoginCode} className="task-form"><p>メールに届く6桁コードを、この画面へ入力してログインします。Safariへ移動する必要はありません。</p><label>メールアドレス<input type="email" required value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="example@email.com" autoComplete="email" /></label><button className="primary-full" type="submit" disabled={authLoading}>{authLoading ? "送信中…" : "6桁コードを送る"}</button>{authMessage && <div className="auth-message">{authMessage}</div>}</form> : <form onSubmit={verifyLoginCode} className="task-form"><p><strong>{authEmail}</strong> に届いた6桁コードを入力してください。</p><label>認証コード<input type="text" required inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="[0-9]{6}" value={authOtp} onChange={(event) => setAuthOtp(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="123456" /></label><button className="primary-full" type="submit" disabled={authLoading || authOtp.length !== 6}>{authLoading ? "確認中…" : "コードを確認してログイン"}</button><button className="secondary-full" type="button" disabled={authLoading} onClick={() => void sendLoginCode({ preventDefault() {} } as FormEvent<HTMLFormElement>)}>コードを再送する</button><button className="secondary-full" type="button" onClick={() => { setAuthStep("email"); setAuthOtp(""); setAuthMessage(""); }}>メールアドレスを変更</button>{authMessage && <div className="auth-message">{authMessage}</div>}</form>}
           </div>
         </div>
       )}
