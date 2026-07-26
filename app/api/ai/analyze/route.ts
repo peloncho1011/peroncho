@@ -111,8 +111,8 @@ export async function POST(request: Request) {
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 
     const suggestionRule = aiSuggestionEnabled
-      ? "suggestedSubtasksは、入力文には無いがメインタスクを進める上で具体的に役立つ作業がある場合のみ、0-5件で提案してください。細かすぎる作業や重要性の低い一般論は提案しないでください。適切な提案が無ければ空配列にしてください。"
-      : "AI提案機能は現在OFFに設定されています。suggestedSubtasksは必ず空配列にしてください。";
+        ? "suggestedSubtasksには、入力文には書かれていないが、メインタスクを実行する上で実務的に役立つ準備作業があれば1〜3件程度、積極的に提案してください。訪問や外出を伴うタスクなら移動時間の確認や持ち物の最終確認、会議や締切のあるタスクなら関係者への確認連絡など、具体的で実行可能な提案を歓迎します。本当に付け加える提案が無い場合のみ空配列にしてください。"
+            : "AI提案機能は現在OFFに設定されています。suggestedSubtasksは必ず空配列にしてください。";
 
     const openAiResponse = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
