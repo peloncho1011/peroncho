@@ -35,6 +35,7 @@ type Task = {
   dueProgress: number | null;
   dueDate?: string;
   dueTotalDays?: number;
+  dueTime?: string;
   priority: "高" | "中" | "低";
   category: string;
   minutes: number;
@@ -49,16 +50,22 @@ type Task = {
   };
 };
 
-type AiAction = "create_task" | "add_subtask" | "update_due_date" | "update_priority" | "complete_task" | "ask_clarification";
+type OrganizeSubtaskDraft = { title: string };
+type ExistingTaskCandidate = { taskId: number; taskTitle: string; confidence: number };
+type AiAction = "create_task" | "add_subtask" | "update_due_date" | "update_priority" | "complete_task" | "ask_clarification" | "organize_task";
 type AiDecision = {
   action: AiAction;
   title: string;
   targetTaskId: number | null;
   targetTaskTitle: string | null;
   dueDate: string | null;
+  dueTime: string | null;
   priority: Task["priority"] | null;
   category: string | null;
   minutes: number | null;
+  extractedSubtasks: OrganizeSubtaskDraft[];
+  suggestedSubtasks: OrganizeSubtaskDraft[];
+  existingTaskCandidates: ExistingTaskCandidate[];
   reason: string;
   confirmationMessage: string;
   clarificationQuestion: string | null;
@@ -100,6 +107,15 @@ export default function Home() {
   const [cloudStatus, setCloudStatus] = useState<"local" | "syncing" | "synced" | "error">("local");
   const [notificationHour, setNotificationHour] = useState(8);
   const [notificationEnabled, setNotificationEnabled] = useState(false);
+  const [aiSuggestionEnabled, setAiSuggestionEnabled] = useState(true);
+  const [organizeMainTitle, setOrganizeMainTitle] = useState("");
+  const [organizeDueDate, setOrganizeDueDate] = useState("");
+  const [organizeDueTime, setOrganizeDueTime] = useState("");
+  const [organizeCategory, setOrganizeCategory] = useState("その他");
+  const [organizePriority, setOrganizePriority] = useState<Task["priority"]>("中");
+  const [extractedItems, setExtractedItems] = useState<{ id: number; title: string }[]>([]);
+  const [suggestedItems, setSuggestedItems] = useState<{ id: number; title: string; checked: boolean }[]>([]);
+  const [selectedExistingTaskId, setSelectedExistingTaskId] = useState<number | null>(null);
   const cloudLoadedFor = useRef<string | null>(null);
   const supabase = useMemo(() => createBrowserSupabase(), []);
   const now = new Date();
@@ -111,7 +127,7 @@ export default function Home() {
       try {
         const saved = window.localStorage.getItem(STORAGE_KEY);
         if (saved) {
-          const parsed = JSON.parse(saved) as { tasks?: Task[]; history?: Task[]; recurringTemplates?: RecurringTemplate[]; generatedRecurringKeys?: string[] };
+          const parsed = JSON.parse(saved) as { tasks?: Task[]; history?: Task[]; recurringTemplates?: RecurringTemplate[]; generatedRecurringKeys?: string[]; aiSuggestionEnabled?: boolean };
           const savedTasks = Array.isArray(parsed.tasks) ? parsed.tasks.map(refreshDeadline) : [];
           const templates = isRecurringTemplateArray(parsed.recurringTemplates) ? parsed.recurringTemplates : createDefaultRecurringTemplates(new Date());
           const ledger = Array.isArray(parsed.generatedRecurringKeys) ? parsed.generatedRecurringKeys.filter((key): key is string => typeof key === "string") : [];
@@ -120,6 +136,7 @@ export default function Home() {
           setRecurringTemplates(templates);
           setGeneratedRecurringKeys(generated.ledger);
           if (Array.isArray(parsed.history)) setHistory(parsed.history);
+          if (typeof parsed.aiSuggestionEnabled === "boolean") setAiSuggestionEnabled(parsed.aiSuggestionEnabled);
         } else {
           const templates = createDefaultRecurringTemplates(new Date());
           const generated = generateRecurringTasks(templates, [], [], new Date());
@@ -138,8 +155,8 @@ export default function Home() {
 
   useEffect(() => {
     if (!storageReady) return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ tasks, history, recurringTemplates, generatedRecurringKeys }));
-  }, [tasks, history, recurringTemplates, generatedRecurringKeys, storageReady]);
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ tasks, history, recurringTemplates, generatedRecurringKeys, aiSuggestionEnabled }));
+  }, [tasks, history, recurringTemplates, generatedRecurringKeys, aiSuggestionEnabled, storageReady]);
 
   useEffect(() => {
     if (!storageReady) return;
@@ -170,13 +187,14 @@ export default function Home() {
         setCloudStatus("error");
         return;
       }
-      const payload = data?.payload as { tasks?: Task[]; history?: Task[]; recurringTemplates?: RecurringTemplate[]; generatedRecurringKeys?: string[]; notificationHour?: number } | undefined;
+      const payload = data?.payload as { tasks?: Task[]; history?: Task[]; recurringTemplates?: RecurringTemplate[]; generatedRecurringKeys?: string[]; notificationHour?: number; aiSuggestionEnabled?: boolean } | undefined;
       if (payload && isTaskArray(payload.tasks) && isTaskArray(payload.history)) {
         setTasks(payload.tasks.map(refreshDeadline));
         setHistory(payload.history);
         if (isRecurringTemplateArray(payload.recurringTemplates)) setRecurringTemplates(payload.recurringTemplates);
         if (Array.isArray(payload.generatedRecurringKeys)) setGeneratedRecurringKeys(payload.generatedRecurringKeys);
         if (typeof payload.notificationHour === "number") setNotificationHour(payload.notificationHour);
+        if (typeof payload.aiSuggestionEnabled === "boolean") setAiSuggestionEnabled(payload.aiSuggestionEnabled);
       }
       cloudLoadedFor.current = session.user.id;
       setCloudStatus("synced");
@@ -189,13 +207,13 @@ export default function Home() {
     const timer = window.setTimeout(async () => {
       const { error } = await supabase.from("user_app_state").upsert({
         user_id: session.user.id,
-        payload: { tasks, history, recurringTemplates, generatedRecurringKeys, notificationHour },
+        payload: { tasks, history, recurringTemplates, generatedRecurringKeys, notificationHour, aiSuggestionEnabled },
         updated_at: new Date().toISOString(),
       });
       setCloudStatus(error ? "error" : "synced");
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [tasks, history, recurringTemplates, generatedRecurringKeys, notificationHour, storageReady, session, supabase]);
+  }, [tasks, history, recurringTemplates, generatedRecurringKeys, notificationHour, aiSuggestionEnabled, storageReady, session, supabase]);
 
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
@@ -563,11 +581,21 @@ export default function Home() {
       const response = await fetch("/api/ai/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ speech: trimmed, tasks }),
+        body: JSON.stringify({ speech: trimmed, tasks, aiSuggestionEnabled }),
       });
       const data = await response.json() as { decision?: AiDecision; error?: string };
       if (!response.ok || !data.decision) throw new Error(data.error || "AIが内容を整理できませんでした");
       setAiDecision(data.decision);
+      if (data.decision.action === "organize_task") {
+        setOrganizeMainTitle(data.decision.title);
+        setOrganizeDueDate(data.decision.dueDate ?? "");
+        setOrganizeDueTime(data.decision.dueTime ?? "");
+        setOrganizeCategory(data.decision.category ?? "その他");
+        setOrganizePriority(data.decision.priority ?? "中");
+        setExtractedItems(data.decision.extractedSubtasks.map((item, index) => ({ id: Date.now() + index, title: item.title })));
+        setSuggestedItems(data.decision.suggestedSubtasks.map((item, index) => ({ id: Date.now() + 1000 + index, title: item.title, checked: false })));
+        setSelectedExistingTaskId(null);
+      }
       setSheet("confirm");
     } catch (error) {
       setAiError(error instanceof Error ? error.message : "AIとの通信に失敗しました");
@@ -624,6 +652,35 @@ export default function Home() {
     setAiDecision(null);
     notify(aiDecision.confirmationMessage);
   }
+
+function applyOrganizeTask() {
+  if (!aiDecision || aiDecision.action !== "organize_task") return;
+  const finalExtracted = extractedItems.filter((item) => item.title.trim()).map((item, index) => ({ id: Date.now() + index, title: item.title.trim(), completed: false }));
+  const finalSuggested = suggestedItems.filter((item) => item.checked && item.title.trim()).map((item, index) => ({ id: Date.now() + 1000 + index, title: item.title.trim(), completed: false }));
+  const newSubtasks = [...finalExtracted, ...finalSuggested];
+  if (selectedExistingTaskId !== null) {
+    setTasks((current) => current.map((task) => task.id === selectedExistingTaskId ? { ...task, subtasks: [...task.subtasks, ...newSubtasks] } : task));
+    notify("既存タスクへサブタスクを追加しました");
+  } else {
+    const title = organizeMainTitle.trim();
+    if (!title) return;
+    const deadline = createDeadline(organizeDueDate);
+    setTasks((current) => [...current, {
+      id: Date.now(),
+      title,
+      priority: organizePriority,
+      category: organizeCategory,
+      minutes: 15,
+      subtasks: newSubtasks,
+      ...deadline,
+      ...(organizeDueTime ? { dueTime: organizeDueTime } : {}),
+    }]);
+    notify("新しいタスクを登録しました");
+  }
+  setSheet("none");
+  setSpeech("");
+  setAiDecision(null);
+}
 
   function continueClarification() {
     if (!aiDecision?.clarificationQuestion) return;
@@ -699,7 +756,7 @@ export default function Home() {
             {selected.recurringSource && <span className="recurring-origin-badge">↻ 定例タスクから作成</span>}
             <span className={`detail-due ${selected.dueTone}`}>{selected.due}</span>
             <h2 className="detail-title">{selected.title}</h2>
-            <div className="detail-grid"><Detail label="優先度" value={selected.priority} /><Detail label="カテゴリ" value={selected.category} /><Detail label="所要時間" value={`約${selected.minutes}分`} /><Detail label="状態" value={selected.completedAt ? "完了" : "未完了"} /></div>
+            <div className="detail-grid"><Detail label="優先度" value={selected.priority} /><Detail label="カテゴリ" value={selected.category} /><Detail label="所要時間" value={`約${selected.minutes}分`} />{selected.dueTime && <Detail label="時刻" value={selected.dueTime} />}<Detail label="状態" value={selected.completedAt ? "完了" : "未完了"} /></div>
             {!!selected.subtasks.length && <div className="subtask-panel"><h3>サブタスク</h3>{selected.subtasks.map((sub) => <label className="detail-subtask" key={sub.id}><input type="checkbox" checked={sub.completed} disabled={!!selected.completedAt} onChange={() => toggleSubtask(selected.id, sub.id)} /><span className="subtask-title">{sub.title}</span>{sub.due && <SubtaskDueBadge due={sub.due} dueTone={sub.dueTone} />}</label>)}</div>}
             {!selected.completedAt && <button className="text-action add-subtask-action" onClick={() => { setAddAsSubtask(true); setSheet("manual"); }}>＋ サブタスクを追加</button>}
             {selected.reason && <div className="reason-box"><span>✦ AIの判断理由</span><p>{selected.reason}、今日のトップ3に選ばれています。</p></div>}
@@ -747,17 +804,64 @@ export default function Home() {
           <div className="sheet-body">
             <div className="quote-box"><span>あなたの入力</span><p>「{speech}」</p></div>
             <div className="decision-card"><div className="decision-icon">✦</div><div><span>判断した操作</span><h3>{actionLabel(aiDecision.action)}</h3></div></div>
-            {aiDecision.action === "ask_clarification" ? (
-              <div className="clarification-box"><span>確認させてください</span><p>{aiDecision.clarificationQuestion}</p></div>
-            ) : <>
-              {aiDecision.targetTaskTitle && <div className="confirm-row"><span>対象タスク</span><strong>{aiDecision.targetTaskTitle}</strong></div>}
-              {aiDecision.title && <div className="confirm-row"><span>内容</span><strong>{aiDecision.title}</strong></div>}
-              {aiDecision.dueDate && <div className="confirm-row"><span>期限</span><strong>{aiDecision.dueDate}</strong></div>}
-              {aiDecision.priority && <div className="confirm-row"><span>優先度</span><strong>{aiDecision.priority}</strong></div>}
-            </>}
+{aiDecision.action === "organize_task" ? (
+<div className="organize-panel">
+{selectedExistingTaskId === null ? (
+<>
+<label className="confirm-edit-row"><span>メインタスク</span><input value={organizeMainTitle} onChange={(event) => setOrganizeMainTitle(event.target.value)} /></label>
+<div className="confirm-edit-grid">
+<label><span>日付</span><input type="date" value={organizeDueDate} onChange={(event) => setOrganizeDueDate(event.target.value)} /></label>
+<label><span>時刻</span><input type="time" value={organizeDueTime} onChange={(event) => setOrganizeDueTime(event.target.value)} /></label>
+<label><span>カテゴリ</span><select value={organizeCategory} onChange={(event) => setOrganizeCategory(event.target.value)}><option>仕事</option><option>営業</option><option>利用者対応</option><option>生活</option><option>個人</option><option>その他</option></select></label>
+<label><span>優先度</span><select value={organizePriority} onChange={(event) => setOrganizePriority(event.target.value as Task["priority"])}><option>高</option><option>中</option><option>低</option></select></label>
+</div>
+</>
+) : (
+<div className="confirm-row"><span>追加先の既存タスク</span><strong>{tasks.find((task) => task.id === selectedExistingTaskId)?.title}</strong></div>
+)}
+{!!aiDecision.existingTaskCandidates.length && (
+<div className="existing-candidate-box">
+<span>似ているタスクがあります</span>
+<label className="candidate-row"><input type="radio" name="existingChoice" checked={selectedExistingTaskId === null} onChange={() => setSelectedExistingTaskId(null)} /> 新しいメインタスクとして登録する</label>
+{aiDecision.existingTaskCandidates.map((candidate) => (
+<label className="candidate-row" key={candidate.taskId}><input type="radio" name="existingChoice" checked={selectedExistingTaskId === candidate.taskId} onChange={() => setSelectedExistingTaskId(candidate.taskId)} /> 既存の「{candidate.taskTitle}」へ追加する</label>
+))}
+</div>
+)}
+<div className="organize-subtask-section">
+<span className="organize-section-label extracted-label">入力内容から整理した作業</span>
+{extractedItems.map((item) => (
+<div className="organize-subtask-row" key={item.id}>
+<input value={item.title} onChange={(event) => setExtractedItems((current) => current.map((row) => row.id === item.id ? { ...row, title: event.target.value } : row))} />
+<button type="button" className="text-action" onClick={() => setExtractedItems((current) => current.filter((row) => row.id !== item.id))}>削除</button>
+</div>
+))}
+<button type="button" className="text-action" onClick={() => setExtractedItems((current) => [...current, { id: Date.now(), title: "" }])}>＋ 作業を追加</button>
+</div>
+{!!suggestedItems.length && (
+<div className="organize-subtask-section suggested-section">
+<span className="organize-section-label suggested-label">AIからの提案</span>
+{suggestedItems.map((item) => (
+<div className="organize-subtask-row" key={item.id}>
+<label className="suggested-check-box"><input type="checkbox" checked={item.checked} onChange={() => setSuggestedItems((current) => current.map((row) => row.id === item.id ? { ...row, checked: !row.checked } : row))} /></label>
+<input value={item.title} onChange={(event) => setSuggestedItems((current) => current.map((row) => row.id === item.id ? { ...row, title: event.target.value } : row))} />
+<button type="button" className="text-action" onClick={() => setSuggestedItems((current) => current.filter((row) => row.id !== item.id))}>今回は追加しない</button>
+</div>
+))}
+</div>
+)}
+</div>
+) : aiDecision.action === "ask_clarification" ? (
+<div className="clarification-box"><span>確認させてください</span><p>{aiDecision.clarificationQuestion}</p></div>
+) : <>
+{aiDecision.targetTaskTitle && <div className="confirm-row"><span>対象タスク</span><strong>{aiDecision.targetTaskTitle}</strong></div>}
+{aiDecision.title && <div className="confirm-row"><span>内容</span><strong>{aiDecision.title}</strong></div>}
+{aiDecision.dueDate && <div className="confirm-row"><span>期限</span><strong>{aiDecision.dueDate}</strong></div>}
+{aiDecision.priority && <div className="confirm-row"><span>優先度</span><strong>{aiDecision.priority}</strong></div>}
+</>}
             <div className="reason-box"><span>判断した理由</span><p>{aiDecision.reason}</p></div>
             <p className="confidence-label">AIの確信度 {Math.round(aiDecision.confidence * 100)}%</p>
-            <div className="two-actions"><button onClick={() => setSheet("none")}>キャンセル</button>{aiDecision.action === "ask_clarification" ? <button className="dark" onClick={continueClarification}>補足する</button> : <button className="dark" onClick={applyAiDecision}>この内容で実行</button>}</div>
+            <div className="two-actions"><button onClick={() => setSheet("none")}>キャンセル</button>{aiDecision.action === "ask_clarification" ? <button className="dark" onClick={continueClarification}>補足する</button> : aiDecision.action === "organize_task" ? <button className="dark" onClick={applyOrganizeTask}>この内容で登録</button> : <button className="dark" onClick={applyAiDecision}>この内容で実行</button>}</div>
           </div>
         </div>
       )}
@@ -787,7 +891,7 @@ export default function Home() {
       {sheet === "settings" && (
         <div className="sheet large-sheet">
           <SheetHeader title="設定" onClose={() => setSheet("none")} />
-          <div className="sheet-body settings-list"><h3>アカウント</h3><button onClick={() => setSheet("account")}><span>{session ? session.user.email : "ログイン"}<small>{session ? cloudStatusLabel(cloudStatus) : "クラウド保存を利用できます"}</small></span><b>›</b></button><h3>お知らせ</h3><button onClick={() => setSheet("notifications")}><span>プッシュ通知<small>{notificationEnabled ? `毎朝${notificationHour}時に確認` : "オフ"}</small></span><b>›</b></button><h3>表示</h3><button><span>表示名<small>雄哉</small></span><b>›</b></button><button><span>朝の基準時刻<small>午前5:00</small></span><b>›</b></button><h3>タスク</h3><button onClick={() => setSheet("recurringList")}><span>定例タスク<small>{recurringTemplates.filter((template) => template.enabled).length}件が有効</small></span><b>›</b></button><h3>データ</h3><button onClick={exportBackup}><span>バックアップを書き出す<small>タスクと定例設定をファイルに保存</small></span><b>↓</b></button><label className="settings-file-button"><span>バックアップを読み込む<small>保存したJSONファイルから復元</small></span><b>↑</b><input type="file" accept="application/json,.json" onChange={importBackup} /></label><h3>アプリ</h3><button><span>ぺろんちょOS<small>6桁コードログイン対応 v0.7</small></span></button></div>
+          <div className="sheet-body settings-list"><h3>アカウント</h3><button onClick={() => setSheet("account")}><span>{session ? session.user.email : "ログイン"}<small>{session ? cloudStatusLabel(cloudStatus) : "クラウド保存を利用できます"}</small></span><b>›</b></button><h3>お知らせ</h3><button onClick={() => setSheet("notifications")}><span>プッシュ通知<small>{notificationEnabled ? `毎朝${notificationHour}時に確認` : "オフ"}</small></span><b>›</b></button><h3>表示</h3><button><span>表示名<small>雄哉</small></span><b>›</b></button><button><span>朝の基準時刻<small>午前5:00</small></span><b>›</b></button><h3>タスク</h3><button onClick={() => setSheet("recurringList")}><span>定例タスク<small>{recurringTemplates.filter((template) => template.enabled).length}件が有効</small></span><b>›</b></button><h3>AI</h3><label className="mini-switch"><input type="checkbox" checked={aiSuggestionEnabled} onChange={(event) => setAiSuggestionEnabled(event.target.checked)} /><span>AIによるタスク提案{aiSuggestionEnabled ? "（オン）" : "（オフ）"}</span></label><h3>データ</h3><button onClick={exportBackup}><span>バックアップを書き出す<small>タスクと定例設定をファイルに保存</small></span><b>↓</b></button><label className="settings-file-button"><span>バックアップを読み込む<small>保存したJSONファイルから復元</small></span><b>↑</b><input type="file" accept="application/json,.json" onChange={importBackup} /></label><h3>アプリ</h3><button><span>ぺろんちょOS<small>6桁コードログイン対応 v0.7</small></span></button></div>
         </div>
       )}
 
@@ -905,6 +1009,7 @@ function actionLabel(action: AiAction) {
     update_priority: "優先度を変更",
     complete_task: "タスクを完了",
     ask_clarification: "確認が必要",
+    organize_task: "タスクを整理",
   }[action];
 }
 
