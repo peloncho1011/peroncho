@@ -116,11 +116,23 @@ export default function Home() {
   const [extractedItems, setExtractedItems] = useState<{ id: number; title: string }[]>([]);
   const [suggestedItems, setSuggestedItems] = useState<{ id: number; title: string; checked: boolean }[]>([]);
   const [selectedExistingTaskId, setSelectedExistingTaskId] = useState<number | null>(null);
+  const [currentDate, setCurrentDate] = useState<Date | null>(null);
   const cloudLoadedFor = useRef<string | null>(null);
   const supabase = useMemo(() => createBrowserSupabase(), []);
-  const now = new Date();
-  const greeting = now.getHours() < 11 ? "おはようございます" : now.getHours() < 18 ? "こんにちは" : "こんばんは";
-  const todayLabel = new Intl.DateTimeFormat("ja-JP", { month: "long", day: "numeric", weekday: "long" }).format(now);
+  const greeting = currentDate
+    ? currentDate.getHours() < 11
+      ? "おはようございます"
+      : currentDate.getHours() < 18
+        ? "こんにちは"
+        : "こんばんは"
+    : "こんにちは";
+  const todayLabel = currentDate
+    ? new Intl.DateTimeFormat("ja-JP", { month: "long", day: "numeric", weekday: "long" }).format(currentDate)
+    : "";
+
+  useEffect(() => {
+    setCurrentDate(new Date());
+  }, []);
 
   useEffect(() => {
     const loadTimer = window.setTimeout(() => {
